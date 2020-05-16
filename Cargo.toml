@@ -8,13 +8,12 @@ edition = "2018"
 name = "hashcash"
 path = "src/lib.rs"
 
-[[bin]]
-name = "hc"
-path = "src/bin/main.rs"
-
 [dependencies]
 chrono = "0.4.11"
 rand = "0.7.3"
 rust-crypto = "0.2.36"
 simpl = "0.1"
-sha3 = "0.8.2"
+log = "0.4.8"
+
+[features]
+sha1 = []

@@ -1,79 +1,27 @@
+#[macro_use]
+extern crate log;
+
 use chrono::{DateTime, Utc};
 use crypto::digest::Digest;
 use crypto::sha1::Sha1;
+use crypto::sha3::Sha3;
 use rand::distributions::{Alphanumeric, Distribution};
 use rand::thread_rng;
 use std::convert::TryFrom;
+use std::fmt;
 
 simpl::err!(HcError,
     {Int@std::num::ParseIntError;}
 );
 
-///    """Mint a new hashcash stamp for 'resource' with 'bits' of collision
-///     20 bits of collision is the default.
-///
-///     'ext' lets you add your own extensions to a minted stamp.  Specify an
-///     extension as a string of form 'name1=2,3;name2;name3=var1=2,2,val'
-///
-///     'saltchars' specifies the length of the salt used; this version defaults
-///     8 chars, rather than the C version's 16 chars.  This still provides about
-///     17 million salts per resource, per timestamp, before birthday paradox
-///     collisions occur.  Really paranoid users can use a larger salt though.
-///
-///     'stamp_seconds' lets you add the option time elements to the datestamp.
-///     If you want more than just day, you get all the way down to seconds,
-///     even though the spec also allows hours/minutes without seconds.
-pub fn mint(
-    resource: &str,
-    bits: usize,
-    now: Option<DateTime<Utc>>,
-    ext: Option<&str>,
-    saltchars: Option<usize>,
-    stamp_seconds: bool,
-) -> String {
-    let ver = "1";
-    let now = now.unwrap_or(Utc::now());
-    let ts = if stamp_seconds {
-        now.format("%Y%M%d%H%M%S")
-    } else {
-        now.format("%Y%M%d")
-    };
-    let ext = ext.unwrap_or("");
-    let saltchars = saltchars.unwrap_or(8);
-    let challenge = format!(
-        "{}:{}:{}:{}:{}:{}",
-        ver,
-        bits,
-        ts,
-        resource,
-        ext,
-        _salt(saltchars)
-    );
-    format!("{}:{}", challenge, _mint(&challenge, bits))
-}
-
-/// Return a random string of length 'l'
-fn _salt(l: usize) -> String {
-    Alphanumeric.sample_iter(thread_rng()).take(l).collect()
-}
-
-//     Answer a 'generalized hashcash challenge'
-//     Hashcash requires stamps of form 'ver:bits:date:res:ext:rand:counter'
-//     This internal function accepts a generalized prefix 'challenge',
-//     and returns only a suffix that produces the requested SHA leading zeros.
-//
-//     NOTE: Number of requested bits is rounded up to the nearest multiple of 4
-fn _mint(challenge: &str, bits: usize) -> String {
+fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
     let mut counter = 0;
     let hex_digits = ((bits as f32) / 4.).ceil() as usize;
     let zeros = String::from_utf8(vec![b'0'; hex_digits]).unwrap();
-    let mut hasher = Sha1::new();
     loop {
-        // println!("{}:{:x}", challenge, counter);
         hasher.input_str(&format!("{}:{:x}", challenge, counter));
-        // println!("{}", hasher.result_str());
         if hasher.result_str()[..hex_digits] == zeros {
-            println!("{}", hasher.result_str());
+            debug!("{}", hasher.result_str());
             return format!("{:x}", counter);
         };
         hasher.reset();
@@ -81,19 +29,34 @@ fn _mint(challenge: &str, bits: usize) -> String {
     }
 }
 
+/// Answer a generalized hashcash version 1 challenge
+/// Hashcash requires stamps of form 'ver:bits:date:res:ext:rand:counter'
+/// This internal function accepts a generalized prefix 'challenge',
+/// and returns only a suffix that produces the requested SHA leading zeros.
+///
+/// NOTE: Number of requested bits is rounded up to the nearest multiple of 4
+fn _mint(challenge: &str, bits: u32) -> String {
+    if cfg!(feature = "sha1") {
+        let mut hasher = Sha1::new();
+        _hash(&mut hasher, challenge, bits)
+    } else {
+        let mut hasher = Sha3::sha3_256();
+        _hash(&mut hasher, challenge, bits)
+    }
+}
+
 /// Check whether a stamp is valid
 ///
-///     Optionally, the stamp may be checked for a specific resource, and/or
-///     it may require a minimum bit value, and/or it may be checked for
-///     expiration, and/or it may be checked for double spending.
+/// Optionally, the stamp may be checked for a specific resource, and/or
+/// it may require a minimum bit value, and/or it may be checked for
+/// expiration, and/or it may be checked for double spending.
 ///
-///     If 'check_expiration' is specified, it should contain the number of
-///     seconds old a date field may be.
+/// If 'check_expiration' is specified, it should contain an expiration DateTime<Utc>
 ///
-///     NOTE: Every valid (version 1) stamp must meet its claimed bit value
-///     NOTE: Check floor of 4-bit multiples (overly permissive in acceptance)
+/// NOTE: Every valid (version 1) stamp must meet its claimed bit value
+/// NOTE: Check floor of 4-bit multiples (overly permissive in acceptance)
 ///     """
-pub fn check(
+pub fn check_with_params(
     stamp: &str,
     resource: Option<&str>,
     bits: Option<u32>,
@@ -121,11 +84,16 @@ pub fn check(
     Ok(stamp.check())
 }
 
+/// Check whether a stamp is valid
+pub fn check(stamp: &str) -> Result<bool> {
+    check_with_params(stamp, None, None, None)
+}
+
 #[derive(Debug)]
-struct Stamp {
+pub struct Stamp {
     version: String,
     claim: u32,
-    date: String,
+    ts: String,
     resource: String,
     ext: String,
     rand: String,
@@ -134,12 +102,12 @@ struct Stamp {
 
 impl Stamp {
     fn check_version(&self) -> bool {
-        self.version == "1".to_string()
+        self.version == "1"
     }
 
     fn check_resource(&self, resource: Option<&str>) -> bool {
         if let Some(resource) = resource {
-            self.resource == resource.to_string()
+            self.resource == resource
         } else {
             true
         }
@@ -169,19 +137,95 @@ impl Stamp {
         String::from_utf8(vec![b'0'; self.hex_digits()]).unwrap()
     }
 
-    fn check(&self) -> bool {
-        let mut hasher = Sha1::new();
-        println!("{}", self.to_string());
+    fn _check<T: Digest>(&self, hasher: &mut T) -> bool {
+        debug!("{}", self.to_string());
         hasher.input_str(&self.to_string());
-        println!("{}", hasher.result_str());
+
+        debug!("{}", hasher.result_str());
         hasher.result_str()[..self.hex_digits()] == self.zeroes()
     }
 
-    fn to_string(&self) -> String {
+    fn check(&self) -> bool {
+        if cfg!(feature = "sha1") {
+            let mut hasher = Sha1::new();
+            self._check(&mut hasher)
+        } else {
+            let mut hasher = Sha3::sha3_256();
+            self._check(&mut hasher)
+        }
+    }
+
+    fn format(&self) -> String {
         format!(
             "{}:{}:{}:{}:{}:{}:{}",
-            self.version, self.claim, self.date, self.resource, self.ext, self.rand, self.counter
+            self.version, self.claim, self.ts, self.resource, self.ext, self.rand, self.counter
         )
+    }
+
+    /// Mint a new hashcash stamp for 'resource' with 'bits' of collision
+    /// 20 bits of collision is the default.
+    ///
+    /// 'ext' lets you add your own extensions to a minted stamp.  Specify an
+    /// extension as a string of form 'name1=2,3;name2;name3=var1=2,2,val'
+    ///
+    /// 'saltchars' specifies the length of the salt used; this version defaults
+    /// 8 chars, rather than the C version's 16 chars.  This still provides about
+    /// 17 million salts per resource, per timestamp, before birthday paradox
+    /// collisions occur.  Really paranoid users can use a larger salt though.
+    ///
+    /// 'stamp_seconds' lets you add the option time elements to the datestamp.
+    /// If you want more than just day, you get all the way down to seconds,
+    /// even though the spec also allows hours/minutes without seconds.
+    pub fn mint(
+        resource: Option<&str>,
+        bits: Option<u32>,
+        now: Option<DateTime<Utc>>,
+        ext: Option<&str>,
+        saltchars: Option<usize>,
+        stamp_seconds: bool,
+    ) -> Result<Self> {
+        let version = "1";
+        let now = now.unwrap_or_else(Utc::now);
+        let ts = if stamp_seconds {
+            now.format("%Y%M%d%H%M%S")
+        } else {
+            now.format("%Y%M%d")
+        };
+        let bits = bits.unwrap_or(20);
+        let ext = ext.unwrap_or("");
+        let saltchars = saltchars.unwrap_or(8);
+        let rand = Alphanumeric
+            .sample_iter(thread_rng())
+            .take(saltchars)
+            .collect();
+        let resource = resource.unwrap_or("");
+        let challenge = format!("{}:{}:{}:{}:{}:{}", version, bits, ts, resource, ext, rand);
+
+        Ok(Stamp {
+            version: version.to_string(),
+            claim: bits,
+            ts: ts.to_string(),
+            resource: resource.to_string(),
+            ext: ext.to_string(),
+            rand,
+            counter: _mint(&challenge, bits),
+        })
+    }
+
+    pub fn with_secs() -> Result<Self> {
+        Self::mint(None, None, None, None, None, true)
+    }
+
+    pub fn with_resource(resource: &str, stamp_seconds: bool) -> Result<Self> {
+        Self::mint(Some(resource), None, None, None, None, stamp_seconds)
+    }
+
+    pub fn with_bits(bits: u32, stamp_seconds: bool) -> Result<Self> {
+        Self::mint(None, Some(bits), None, None, None, stamp_seconds)
+    }
+
+    pub fn with_resource_and_bits(resource: &str, bits: u32, stamp_seconds: bool) -> Result<Self> {
+        Self::mint(Some(resource), Some(bits), None, None, None, stamp_seconds)
     }
 }
 
@@ -198,11 +242,119 @@ impl TryFrom<&str> for Stamp {
         Ok(Stamp {
             version: stamp_vec[0].to_string(),
             claim: stamp_vec[1].parse()?,
-            date: stamp_vec[2].to_string(),
+            ts: stamp_vec[2].to_string(),
             resource: stamp_vec[3].to_string(),
             ext: stamp_vec[4].to_string(),
             rand: stamp_vec[5].to_string(),
             counter: stamp_vec[6].to_string(),
         })
     }
+}
+
+impl fmt::Display for Stamp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.format())
+    }
+}
+
+impl Default for Stamp {
+    fn default() -> Self {
+        Self::mint(None, None, None, None, None, false).unwrap()
+    }
+}
+
+mod test {
+    use crate::Stamp;
+    use crate::check;
+    #[test]
+    fn test_default() {
+        let stamp = Stamp::default();
+        let result = check(&stamp.to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_secs() {
+        let stamp = Stamp::with_secs();
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_resource() {
+        let stamp = Stamp::with_resource("test", false);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_resource_and_seconds() {
+        let stamp = Stamp::with_resource("test", true);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_bits() {
+        let stamp = Stamp::with_bits(16, false);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_bits_and_seconds() {
+        let stamp = Stamp::with_bits(16, true);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_resource_and_bits() {
+        let stamp = Stamp::with_resource_and_bits("test", 16, false);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_with_resource_and_bits_and_seconds() {
+        let stamp = Stamp::with_resource_and_bits("test", 16, true);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_mint() {
+        let stamp = Stamp::mint(Some("test"), Some(15), None, Some("name1=2"), Some(12), false);
+        assert!(stamp.is_ok());
+        let result = check(&stamp.unwrap().to_string());
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn test_check() {
+        assert!(check("1:20:20202116:test::Z4p8WaiO:31c14").unwrap());
+        assert!(!check("1:20:20202116:test1::Z4p8WaiO:31c14").unwrap());
+        assert!(!check("1:20:20202116:test::z4p8WaiO:31c14").unwrap());
+        assert!(!check("1:20:20202116:test::Z4p8WaiO:31C14").unwrap());
+        assert!(check("0:20:20202116:test::Z4p8WaiO:31c14").is_err());
+        assert!(!check("1:19:20202116:test::Z4p8WaiO:31c14").unwrap());
+        assert!(!check("1:20:20202115:test::Z4p8WaiO:31c14").unwrap());
+    }
+
 }
