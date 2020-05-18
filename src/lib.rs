@@ -2,9 +2,9 @@
 extern crate log;
 
 use chrono::{DateTime, Utc};
-use crypto::digest::Digest;
-use crypto::sha1::Sha1;
-use crypto::sha3::Sha3;
+use sha1::Sha1;
+use sha3::Sha3_256;
+use digest::Digest;
 use rand::distributions::{Alphanumeric, Distribution};
 use rand::thread_rng;
 use std::convert::TryFrom;
@@ -19,12 +19,12 @@ fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
     let hex_digits = ((bits as f32) / 4.).ceil() as usize;
     let zeros = String::from_utf8(vec![b'0'; hex_digits]).unwrap();
     loop {
-        hasher.input_str(&format!("{}:{:x}", challenge, counter));
-        if hasher.result_str()[..hex_digits] == zeros {
-            debug!("{}", hasher.result_str());
+        hasher.input(&format!("{}:{:x}", challenge, counter).as_bytes());
+        let result = hex::encode(hasher.result_reset());
+        if &result[..hex_digits] == zeros {
+            debug!("{}", &result);
             return format!("{:x}", counter);
         };
-        hasher.reset();
         counter += 1
     }
 }
@@ -36,11 +36,11 @@ fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
 ///
 /// NOTE: Number of requested bits is rounded up to the nearest multiple of 4
 fn _mint(challenge: &str, bits: u32) -> String {
-    if cfg!(feature = "sha1") {
+    if cfg!(feature = "sha-1") {
         let mut hasher = Sha1::new();
         _hash(&mut hasher, challenge, bits)
     } else {
-        let mut hasher = Sha3::sha3_256();
+        let mut hasher = Sha3_256::new();
         _hash(&mut hasher, challenge, bits)
     }
 }
@@ -139,10 +139,10 @@ impl Stamp {
 
     fn _check<T: Digest>(&self, hasher: &mut T) -> bool {
         debug!("{}", self.to_string());
-        hasher.input_str(&self.to_string());
-
-        debug!("{}", hasher.result_str());
-        hasher.result_str()[..self.hex_digits()] == self.zeroes()
+        hasher.input(&self.to_string().as_bytes());
+        let result = hex::encode(hasher.result_reset());
+        debug!("{}", &result);
+        &result[..self.hex_digits()] == self.zeroes()
     }
 
     fn check(&self) -> bool {
@@ -150,7 +150,7 @@ impl Stamp {
             let mut hasher = Sha1::new();
             self._check(&mut hasher)
         } else {
-            let mut hasher = Sha3::sha3_256();
+            let mut hasher = Sha3_256::new();
             self._check(&mut hasher)
         }
     }
@@ -187,9 +187,9 @@ impl Stamp {
         let version = "1";
         let now = now.unwrap_or_else(Utc::now);
         let ts = if stamp_seconds {
-            now.format("%Y%M%d%H%M%S")
+            now.format("%Y%m%d%H%M%S")
         } else {
-            now.format("%Y%M%d")
+            now.format("%Y%m%d")
         };
         let bits = bits.unwrap_or(20);
         let ext = ext.unwrap_or("");

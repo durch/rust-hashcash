@@ -1,6 +1,6 @@
 [package]
 name = "rust-hashcash"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Drazen Urch <drazen@urch.eu>"]
 edition = "2018"
 license = "MIT"
@@ -14,12 +14,19 @@ keywords = ["hashcash", "sha3", "sha1"]
 name = "hashcash"
 path = "src/lib.rs"
 
+[[bin]]
+name = "hc"
+path = "src/main.rs"
+
 [dependencies]
 chrono = "0.4.11"
 rand = "0.7.3"
-rust-crypto = "0.2.36"
+sha-1 = "0.8.2"
+sha3 = "0.8.2"
+digest = "0.8.1"
 simpl = "0.1"
 log = "0.4.8"
+hex = "0.4.2"
 
 [features]
 sha1 = []
