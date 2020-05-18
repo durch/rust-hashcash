@@ -6,7 +6,7 @@ MIT licensed Rust implementation of the [hashcash](http://www.hashcash.org/) alg
 
 ```rust
 
-use rust_hashcash::{Stamp, check};
+use hashcash::{Stamp, check};
 
 fn main {
 
