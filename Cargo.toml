@@ -1,5 +1,5 @@
 [package]
-name = "hashcash"
+name = "rust-hashcash"
 version = "0.1.0"
 authors = ["Drazen Urch <drazen@urch.eu>"]
 edition = "2018"
