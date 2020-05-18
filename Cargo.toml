@@ -3,6 +3,12 @@ name = "rust-hashcash"
 version = "0.1.0"
 authors = ["Drazen Urch <drazen@urch.eu>"]
 edition = "2018"
+license = "MIT"
+documentation = "https://durch.github.io/rust-hashcash/hashcash/"
+description = "Rust hashcash algorithm implementation with sha3 support"
+keywords = ["hashcash", "sha3", "sha1"]
+
+
 
 [lib]
 name = "hashcash"
