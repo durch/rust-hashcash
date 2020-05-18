@@ -1,7 +1,7 @@
 #[macro_use]
 extern crate log;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, NaiveDateTime};
 use sha1::Sha1;
 use sha3::Sha3_256;
 use digest::Digest;
@@ -21,7 +21,7 @@ fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
     loop {
         hasher.input(&format!("{}:{:x}", challenge, counter).as_bytes());
         let result = hex::encode(hasher.result_reset());
-        if &result[..hex_digits] == zeros {
+        if result[..hex_digits] == zeros {
             debug!("{}", &result);
             return format!("{:x}", counter);
         };
@@ -142,7 +142,7 @@ impl Stamp {
         hasher.input(&self.to_string().as_bytes());
         let result = hex::encode(hasher.result_reset());
         debug!("{}", &result);
-        &result[..self.hex_digits()] == self.zeroes()
+        result[..self.hex_digits()] == self.zeroes()
     }
 
     fn check(&self) -> bool {
@@ -179,13 +179,17 @@ impl Stamp {
     pub fn mint(
         resource: Option<&str>,
         bits: Option<u32>,
-        now: Option<DateTime<Utc>>,
+        now: Option<i64>,
         ext: Option<&str>,
         saltchars: Option<usize>,
         stamp_seconds: bool,
     ) -> Result<Self> {
         let version = "1";
-        let now = now.unwrap_or_else(Utc::now);
+        let now = if let Some(now) = now {
+            DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(now, 0), Utc)
+        } else {
+             Utc::now()
+        };
         let ts = if stamp_seconds {
             now.format("%Y%m%d%H%M%S")
         } else {
