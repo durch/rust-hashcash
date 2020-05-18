@@ -6,11 +6,11 @@ MIT licensed Rust implementation of the [hashcash](http://www.hashcash.org/) alg
 
 ```rust
 
-use hashcash::{Stamp, check}
+use rust_hashcash::{Stamp, check};
 
 fn main {
 
-    let stamp = Stamp::default().unwrap();
+    let stamp = Stamp::default();
     assert!(check(stamp.to_string()));
 
 }
