@@ -162,6 +162,16 @@ impl Stamp {
         )
     }
 
+    pub fn mint_wasm(
+        resource: Option<&str>,
+        bits: Option<u32>,
+        now: u32,
+        ext: Option<&str>,
+        saltchars: Option<usize>,
+        stamp_seconds: bool,) -> Result<Self> {
+            Ok(Stamp::mint(resource, bits, Some(now as i64), ext, saltchars, stamp_seconds)?)
+        }
+
     /// Mint a new hashcash stamp for 'resource' with 'bits' of collision
     /// 20 bits of collision is the default.
     ///
