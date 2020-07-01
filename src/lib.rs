@@ -1,18 +1,78 @@
 #[macro_use]
 extern crate log;
 
-use chrono::{DateTime, Utc, NaiveDateTime};
-use sha1::Sha1;
-use sha3::Sha3_256;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use digest::Digest;
 use rand::distributions::{Alphanumeric, Distribution};
 use rand::thread_rng;
+use sha1::Sha1;
+use sha3::Sha3_256;
 use std::convert::TryFrom;
 use std::fmt;
+use std::time::SystemTime;
 
 simpl::err!(HcError,
-    {Int@std::num::ParseIntError;}
+    {
+        Int@std::num::ParseIntError;
+        Time@std::time::SystemTimeError;
+    }
 );
+
+fn to_iso_32bit_safe(timestamp_secs: u32, short: bool) -> String {
+    let mut seconds = timestamp_secs;
+    let mut minutes = seconds / 60;
+    seconds -= minutes * 60;
+    let mut hours = minutes / 60;
+    minutes -= hours * 60;
+    let mut days = hours / 24;
+    hours -= days * 24;
+    let mut year = 1970;
+    let mut day_of_week = 4;
+    let mut mnth = 0;
+    loop {
+        let leap_year = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let days_in_year = if leap_year { 366 } else { 365 };
+        if days >= days_in_year {
+            day_of_week += if leap_year { 2 } else { 1 };
+            days -= days_in_year;
+            if day_of_week >= 7 {
+                day_of_week -= 7;
+            }
+            year += 1;
+        } else {
+            day_of_week += days;
+            day_of_week %= 7;
+
+            let days_in_month = vec![31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            for month in 0..12 {
+                mnth = month;
+                let mut dim = *days_in_month.get(month).unwrap();
+
+                /* add a day to February if this is a leap year */
+                if month == 1 && leap_year {
+                    dim += 1;
+                }
+
+                if days >= dim {
+                    days -= dim;
+                } else {
+                    break;
+                }
+            }
+            mnth += 1;
+            days += 1;
+            break;
+        }
+    }
+    if short {
+        format!("{}-{:02}-{:02}", year, mnth, days)
+    } else {
+        format!(
+            "{}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            year, mnth, days, hours, minutes, seconds
+        )
+    }
+}
 
 fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
     let mut counter = 0;
@@ -162,15 +222,49 @@ impl Stamp {
         )
     }
 
+    /// Like mint() but for webassembly, 32bit system safe
     pub fn mint_wasm(
         resource: Option<&str>,
         bits: Option<u32>,
-        now: u32,
+        now: Option<u32>,
         ext: Option<&str>,
         saltchars: Option<usize>,
-        stamp_seconds: bool,) -> Result<Self> {
-            Ok(Stamp::mint(resource, bits, Some(now as i64), ext, saltchars, stamp_seconds)?)
-        }
+        stamp_seconds: bool,
+    ) -> Result<Self> {
+        let version = "1";
+
+        let timestamp_secs = if let Some(now) = now {
+            now
+        } else {
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)?
+                .as_secs() as u32
+        };
+        let ts = if stamp_seconds {
+            to_iso_32bit_safe(timestamp_secs, false)
+        } else {
+            to_iso_32bit_safe(timestamp_secs, true)
+        };
+        let bits = bits.unwrap_or(20);
+        let ext = ext.unwrap_or("");
+        let saltchars = saltchars.unwrap_or(8);
+        let rand = Alphanumeric
+            .sample_iter(thread_rng())
+            .take(saltchars)
+            .collect();
+        let resource = resource.unwrap_or("");
+        let challenge = format!("{}:{}:{}:{}:{}:{}", version, bits, ts, resource, ext, rand);
+
+        Ok(Stamp {
+            version: version.to_string(),
+            claim: bits,
+            ts,
+            resource: resource.to_string(),
+            ext: ext.to_string(),
+            rand,
+            counter: _mint(&challenge, bits),
+        })
+    }
 
     /// Mint a new hashcash stamp for 'resource' with 'bits' of collision
     /// 20 bits of collision is the default.
@@ -198,7 +292,7 @@ impl Stamp {
         let now = if let Some(now) = now {
             DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(now, 0), Utc)
         } else {
-             Utc::now()
+            Utc::now()
         };
         let ts = if stamp_seconds {
             now.format("%Y%m%d%H%M%S")
@@ -278,8 +372,10 @@ impl Default for Stamp {
 }
 
 mod test {
-    use crate::Stamp;
     use crate::check;
+    use crate::Stamp;
+    use crate::to_iso_32bit_safe;
+
     #[test]
     fn test_default() {
         let stamp = Stamp::default();
@@ -353,7 +449,14 @@ mod test {
 
     #[test]
     fn test_mint() {
-        let stamp = Stamp::mint(Some("test"), Some(15), None, Some("name1=2"), Some(12), false);
+        let stamp = Stamp::mint(
+            Some("test"),
+            Some(15),
+            None,
+            Some("name1=2"),
+            Some(12),
+            false,
+        );
         assert!(stamp.is_ok());
         let result = check(&stamp.unwrap().to_string());
         assert!(result.is_ok());
@@ -371,4 +474,8 @@ mod test {
         assert!(!check("1:20:20202115:test::Z4p8WaiO:31c14").unwrap());
     }
 
+    #[test]
+    fn test_to_iso() {
+        assert_eq!(to_iso_32bit_safe(1592565184, false), "2020-06-19T11:13:04Z")
+    }
 }
