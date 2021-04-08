@@ -96,7 +96,7 @@ fn _hash<T: Digest>(hasher: &mut T, challenge: &str, bits: u32) -> String {
 ///
 /// NOTE: Number of requested bits is rounded up to the nearest multiple of 4
 fn _mint(challenge: &str, bits: u32) -> String {
-    if cfg!(feature = "sha-1") {
+    if cfg!(feature = "sha1") {
         let mut hasher = Sha1::new();
         _hash(&mut hasher, challenge, bits)
     } else {
